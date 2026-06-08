@@ -683,7 +683,7 @@ with gr.Blocks(title="Digit Recognizer") as demo:
                 )
                 clear_history_btn = gr.Button("Clear history", variant="secondary")
 
-    with gr.Accordion("Tips & how it works", open=False):
+    with gr.Accordion("Working/Process", open=False):
         gr.Markdown("""
             **Drawing:** one digit, thick strokes, centered on the canvas.
 
