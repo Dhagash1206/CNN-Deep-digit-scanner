@@ -13,7 +13,10 @@ from PIL import Image, ImageOps
 
 MODEL_PATH = "mnist_cnn_model.keras"
 PREVIEW_SIZE = 168
-CANVAS_SIZE = (320, 320)
+CANVAS_SIZE = (520, 520)
+GLYPH_SIZE = int(CANVAS_SIZE[0] * 0.75)
+BRUSH_SIZE = 22
+ERASER_SIZE = 44
 INK_THRESHOLD = 15
 MIN_INK_PIXELS = 40
 LOW_CONFIDENCE = 55.0
@@ -147,15 +150,19 @@ def preprocess(image):
 
 def mnist_to_canvas(digit: int) -> np.ndarray:
     sample = _mnist_examples()[digit]
-    glyph = Image.fromarray(sample).resize((240, 240), Image.NEAREST)
+    glyph = Image.fromarray(sample).resize((GLYPH_SIZE, GLYPH_SIZE), Image.NEAREST)
     glyph = ImageOps.invert(glyph)
 
     canvas = np.full((*CANVAS_SIZE, 3), 255, dtype=np.uint8)
-    offset_y = (CANVAS_SIZE[1] - 240) // 2
-    offset_x = (CANVAS_SIZE[0] - 240) // 2
+    offset_y = (CANVAS_SIZE[1] - GLYPH_SIZE) // 2
+    offset_x = (CANVAS_SIZE[0] - GLYPH_SIZE) // 2
     rgb = np.stack([glyph, glyph, glyph], axis=-1)
-    canvas[offset_y : offset_y + 240, offset_x : offset_x + 240] = rgb
+    canvas[offset_y : offset_y + GLYPH_SIZE, offset_x : offset_x + GLYPH_SIZE] = rgb
     return canvas
+
+
+def _blank_canvas() -> np.ndarray:
+    return np.full((*CANVAS_SIZE, 3), 255, dtype=np.uint8)
 
 
 def _confidence_df(probabilities: np.ndarray, predicted: int) -> pd.DataFrame:
@@ -281,7 +288,7 @@ def predict(image, history, use_tta):
 
 def clear_canvas(history):
     return (
-        None,
+        _blank_canvas(),
         _empty_outputs("Canvas cleared. Draw a new digit.")[0],
         None,
         None,
@@ -416,10 +423,12 @@ CUSTOM_CSS = """
 }
 
 .gradio-container {
-    max-width: 1180px !important;
+    max-width: 1320px !important;
     margin: 0 auto !important;
     background: var(--app-page-bg) !important;
 }
+.draw-panel .wrap { min-height: 0 !important; }
+.draw-panel canvas { touch-action: none; }
 .hero {
     text-align: center;
     padding: 0.25rem 0 1rem;
@@ -545,7 +554,23 @@ THEME_BOOTSTRAP_JS = """
   const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
   const mode = saved || (prefersDark ? "dark" : "light");
   document.documentElement.setAttribute("data-theme", mode);
+  const selectBrush = () => {
+    document.querySelector(".draw-panel button[aria-label='Brush']")?.click();
+  };
+  selectBrush();
+  setTimeout(selectBrush, 200);
+  setTimeout(selectBrush, 600);
   return mode === "dark" ? "Dark" : "Light";
+}
+"""
+
+SELECT_BRUSH_JS = """
+() => {
+  const selectBrush = () => {
+    document.querySelector(".draw-panel button[aria-label='Brush']")?.click();
+  };
+  setTimeout(selectBrush, 50);
+  setTimeout(selectBrush, 300);
 }
 """
 
@@ -605,15 +630,16 @@ with gr.Blocks(title="Digit Recognizer") as demo:
     with gr.Tabs():
         with gr.Tab("Recognize"):
             with gr.Row(equal_height=False):
-                with gr.Column(scale=5):
-                    with gr.Group(elem_classes=["panel"]):
+                with gr.Column(scale=6):
+                    with gr.Group(elem_classes=["panel", "draw-panel"]):
                         canvas = gr.Sketchpad(
                             label="Draw here",
                             type="numpy",
                             image_mode="RGB",
                             canvas_size=CANVAS_SIZE,
-                            brush=gr.Brush(colors=["#111827"], default_size=22),
-                            eraser=gr.Eraser(default_size=28),
+                            value=_blank_canvas(),
+                            brush=gr.Brush(colors=["#111827"], default_size=BRUSH_SIZE),
+                            eraser=gr.Eraser(default_size=ERASER_SIZE),
                         )
                         gr.Markdown("**Try a sample** (loads MNIST digit onto canvas)")
                         with gr.Row(elem_classes=["example-row"]):
@@ -631,7 +657,7 @@ with gr.Blocks(title="Digit Recognizer") as demo:
                         with gr.Row():
                             live_predict = gr.Checkbox(
                                 label="Live predict",
-                                value=False,
+                                value=True,
                                 info="Predict after each stroke.",
                             )
                             use_tta = gr.Checkbox(
@@ -640,7 +666,7 @@ with gr.Blocks(title="Digit Recognizer") as demo:
                                 info="Average 7 shifted views for tougher strokes.",
                             )
 
-                with gr.Column(scale=4):
+                with gr.Column(scale=4, min_width=320):
                     result_html = gr.HTML(
                         value=_empty_outputs("Draw a digit on the canvas to begin.")[0]
                     )
@@ -708,7 +734,12 @@ with gr.Blocks(title="Digit Recognizer") as demo:
     predict_inputs = [canvas, history_state, use_tta]
 
     predict_btn.click(fn=predict, inputs=predict_inputs, outputs=outputs)
-    clear_btn.click(fn=clear_canvas, inputs=[history_state], outputs=[canvas, *outputs])
+    clear_btn.click(
+        fn=clear_canvas,
+        inputs=[history_state],
+        outputs=[canvas, *outputs],
+        js=SELECT_BRUSH_JS,
+    )
     clear_history_btn.click(fn=clear_history, outputs=[history_table, history_state])
 
     for digit, btn in enumerate(example_btns):
