@@ -197,7 +197,9 @@ def _result_html(predicted: int, confidence_pct: float, margin_pct: float) -> st
     """
 
 
-def _metrics_html(confidence_pct: float, margin_pct: float, entropy: float, use_tta: bool) -> str:
+def _metrics_html(
+    confidence_pct: float, margin_pct: float, entropy: float, use_tta: bool
+) -> str:
     certainty = max(0.0, min(100.0, 100.0 - entropy * 25.0))
     mode = "TTA ensemble" if use_tta else "Single pass"
     return f"""
@@ -301,64 +303,183 @@ def clear_history():
     return _history_dataframe([]), []
 
 
+def _build_theme(dark: bool):
+    base = gr.themes.Base if dark else gr.themes.Soft
+    theme = base(
+        primary_hue="blue",
+        secondary_hue="slate",
+        neutral_hue="slate",
+        font=[gr.themes.GoogleFont("Inter"), "system-ui", "sans-serif"],
+    )
+    if dark:
+        return theme.set(
+            body_background_fill="#0f1117",
+            block_background_fill="#1a1d27",
+            block_border_color="#2d3344",
+            block_border_width="1px",
+            block_label_text_color="#9ca3af",
+            block_title_text_color="#f3f4f6",
+            body_text_color="#e5e7eb",
+            input_background_fill="#12151f",
+            button_secondary_background_fill="#252a3a",
+            button_secondary_text_color="#e5e7eb",
+            block_radius="12px",
+            button_large_radius="10px",
+        )
+    return theme.set(
+        block_background_fill="*neutral_50",
+        block_border_width="1px",
+        block_radius="12px",
+        button_large_radius="10px",
+    )
+
+
+LIGHT_THEME = _build_theme(dark=False)
+DARK_THEME = _build_theme(dark=True)
+
+
 CUSTOM_CSS = """
+:root,
+[data-theme="light"] {
+    --app-page-bg: #f3f4f6;
+    --app-panel-bg: #fafbfd;
+    --app-panel-border: #e7e9ef;
+    --app-text-muted: #5f6470;
+    --app-text-sub: #6b7280;
+    --app-text-body: #374151;
+    --app-text-strong: #111827;
+    --app-badge-text: #1d4ed8;
+    --app-badge-bg: #dbeafe;
+    --app-result-bg: linear-gradient(160deg, #f4f7ff 0%, #ffffff 100%);
+    --app-result-border: #dbe4ff;
+    --app-result-low-bg: linear-gradient(160deg, #fff8ef 0%, #ffffff 100%);
+    --app-result-low-border: #f3dcc0;
+    --app-result-empty-bg: #f7f8fa;
+    --app-result-empty-border: #e3e6ec;
+    --app-digit: #1d4ed8;
+    --app-digit-low: #b45309;
+    --app-warn: #b45309;
+    --app-metric-bg: #ffffff;
+    --app-metric-border: #e5e7eb;
+    --app-chip-bg: #eef2ff;
+    --app-chip-text: #3730a3;
+    --app-chip-border: #c7d2fe;
+    --app-chip-active-bg: #1d4ed8;
+    --app-chip-active-text: #ffffff;
+    --app-plot-top: #1d4ed8;
+    --app-plot-other: #cbd5e1;
+}
+
+[data-theme="dark"] {
+    --app-page-bg: #0f1117;
+    --app-panel-bg: #1a1d27;
+    --app-panel-border: #2d3344;
+    --app-text-muted: #9ca3af;
+    --app-text-sub: #9ca3af;
+    --app-text-body: #d1d5db;
+    --app-text-strong: #f9fafb;
+    --app-badge-text: #93c5fd;
+    --app-badge-bg: #1e3a5f;
+    --app-result-bg: linear-gradient(160deg, #1e293b 0%, #1a1d27 100%);
+    --app-result-border: #334155;
+    --app-result-low-bg: linear-gradient(160deg, #3b2f1f 0%, #1a1d27 100%);
+    --app-result-low-border: #854d0e;
+    --app-result-empty-bg: #151821;
+    --app-result-empty-border: #2d3344;
+    --app-digit: #60a5fa;
+    --app-digit-low: #fbbf24;
+    --app-warn: #fbbf24;
+    --app-metric-bg: #12151f;
+    --app-metric-border: #2d3344;
+    --app-chip-bg: #1e293b;
+    --app-chip-text: #bfdbfe;
+    --app-chip-border: #334155;
+    --app-chip-active-bg: #2563eb;
+    --app-chip-active-text: #ffffff;
+    --app-plot-top: #60a5fa;
+    --app-plot-other: #475569;
+}
+
+[data-theme="dark"] .gradio-container {
+    --body-background-fill: #0f1117;
+    --block-background-fill: #1a1d27;
+    --block-border-color: #2d3344;
+    --block-label-text-color: #9ca3af;
+    --block-title-text-color: #f3f4f6;
+    --body-text-color: #e5e7eb;
+    --input-background-fill: #12151f;
+    --button-secondary-background-fill: #252a3a;
+    --button-secondary-text-color: #e5e7eb;
+    --table-even-background-fill: #12151f;
+    --table-odd-background-fill: #1a1d27;
+    --border-color-primary: #2d3344;
+}
+
 .gradio-container {
     max-width: 1180px !important;
     margin: 0 auto !important;
+    background: var(--app-page-bg) !important;
 }
 .hero {
     text-align: center;
     padding: 0.25rem 0 1rem;
+}
+.hero-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-bottom: 0.35rem;
 }
 .hero-badge {
     display: inline-block;
     font-size: 0.72rem;
     letter-spacing: 0.12em;
     text-transform: uppercase;
-    color: #1d4ed8;
-    background: #dbeafe;
+    color: var(--app-badge-text);
+    background: var(--app-badge-bg);
     border-radius: 999px;
     padding: 0.25rem 0.65rem;
-    margin-bottom: 0.5rem;
 }
 .hero h1 {
     font-size: 2.1rem;
     font-weight: 800;
     letter-spacing: -0.03em;
     margin: 0 0 0.35rem;
+    color: var(--app-text-strong);
 }
-.hero p { color: #5f6470; margin: 0; }
+.hero p { color: var(--app-text-muted); margin: 0; }
 .panel {
-    border: 1px solid #e7e9ef;
+    border: 1px solid var(--app-panel-border);
     border-radius: 16px;
     padding: 1rem;
-    background: #fafbfd;
+    background: var(--app-panel-bg);
 }
 .result-card {
     text-align: center;
     border-radius: 16px;
     padding: 1.1rem 1rem;
-    background: linear-gradient(160deg, #f4f7ff 0%, #ffffff 100%);
-    border: 1px solid #dbe4ff;
+    background: var(--app-result-bg);
+    border: 1px solid var(--app-result-border);
     min-height: 210px;
     display: flex;
     flex-direction: column;
     justify-content: center;
 }
 .result-card.low {
-    background: linear-gradient(160deg, #fff8ef 0%, #ffffff 100%);
-    border-color: #f3dcc0;
+    background: var(--app-result-low-bg);
+    border-color: var(--app-result-low-border);
 }
 .result-card.empty {
-    background: #f7f8fa;
-    border-color: #e3e6ec;
+    background: var(--app-result-empty-bg);
+    border-color: var(--app-result-empty-border);
     min-height: 120px;
 }
 .result-label {
     font-size: 0.82rem;
     text-transform: uppercase;
     letter-spacing: 0.08em;
-    color: #6b7280;
+    color: var(--app-text-sub);
     margin: 0 0 0.35rem;
 }
 .result-digit {
@@ -366,20 +487,20 @@ CUSTOM_CSS = """
     line-height: 1;
     font-weight: 800;
     margin: 0;
-    color: #1d4ed8;
+    color: var(--app-digit);
 }
-.result-card.low .result-digit { color: #b45309; }
-.result-confidence { margin: 0.45rem 0 0; font-size: 1.05rem; color: #374151; }
-.result-sub { margin: 0.2rem 0 0; font-size: 0.92rem; color: #6b7280; }
-.warn { margin: 0.65rem 0 0; font-size: 0.88rem; color: #b45309; }
+.result-card.low .result-digit { color: var(--app-digit-low); }
+.result-confidence { margin: 0.45rem 0 0; font-size: 1.05rem; color: var(--app-text-body); }
+.result-sub { margin: 0.2rem 0 0; font-size: 0.92rem; color: var(--app-text-sub); }
+.warn { margin: 0.65rem 0 0; font-size: 0.88rem; color: var(--app-warn); }
 .metrics {
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 0.55rem;
 }
 .metric {
-    background: #ffffff;
-    border: 1px solid #e5e7eb;
+    background: var(--app-metric-bg);
+    border: 1px solid var(--app-metric-border);
     border-radius: 12px;
     padding: 0.55rem 0.65rem;
     text-align: center;
@@ -389,9 +510,9 @@ CUSTOM_CSS = """
     font-size: 0.72rem;
     text-transform: uppercase;
     letter-spacing: 0.06em;
-    color: #6b7280;
+    color: var(--app-text-sub);
 }
-.metric strong { font-size: 1rem; color: #111827; }
+.metric strong { font-size: 1rem; color: var(--app-text-strong); }
 .chip-row { display: flex; flex-wrap: wrap; gap: 0.45rem; margin-top: 0.2rem; }
 .chip {
     display: inline-flex;
@@ -399,48 +520,85 @@ CUSTOM_CSS = """
     border-radius: 999px;
     padding: 0.32rem 0.7rem;
     font-size: 0.88rem;
-    background: #eef2ff;
-    color: #3730a3;
-    border: 1px solid #c7d2fe;
+    background: var(--app-chip-bg);
+    color: var(--app-chip-text);
+    border: 1px solid var(--app-chip-border);
 }
 .chip.active {
-    background: #1d4ed8;
-    color: #ffffff;
-    border-color: #1d4ed8;
+    background: var(--app-chip-active-bg);
+    color: var(--app-chip-active-text);
+    border-color: var(--app-chip-active-bg);
     font-weight: 600;
 }
 .example-row button { min-width: 2.1rem !important; font-weight: 700 !important; }
 .preview-pair { gap: 0.75rem !important; }
+.theme-switch label { margin-bottom: 0 !important; }
 @media (max-width: 900px) {
     .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .hero-top { flex-direction: column; align-items: stretch; }
+}
+"""
+
+THEME_BOOTSTRAP_JS = """
+() => {
+  const saved = localStorage.getItem("digit-recognizer-theme");
+  const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+  const mode = saved || (prefersDark ? "dark" : "light");
+  document.documentElement.setAttribute("data-theme", mode);
+  return mode === "dark" ? "Dark" : "Light";
+}
+"""
+
+THEME_APPLY_JS = """
+(mode) => {
+  const theme = mode === "Dark" ? "dark" : "light";
+  document.documentElement.setAttribute("data-theme", theme);
+  localStorage.setItem("digit-recognizer-theme", theme);
 }
 """
 
 
-theme = gr.themes.Soft(
-    primary_hue="blue",
-    secondary_hue="slate",
-    neutral_hue="slate",
-    font=[gr.themes.GoogleFont("Inter"), "system-ui", "sans-serif"],
-).set(
-    block_background_fill="*neutral_50",
-    block_border_width="1px",
-    block_radius="12px",
-    button_large_radius="10px",
-)
+def _plot_colors(dark: bool) -> dict[str, str]:
+    if dark:
+        return {"top": "#60a5fa", "other": "#475569"}
+    return {"top": "#1d4ed8", "other": "#cbd5e1"}
+
+
+def _apply_theme_mode(mode: str):
+    return gr.BarPlot.update(color_map=_plot_colors(mode == "Dark"))
+
 
 with gr.Blocks(title="Digit Recognizer") as demo:
     history_state = gr.State([])
 
-    gr.HTML(
-        """
+    gr.HTML("""
+        <script>
+        (function () {
+            const saved = localStorage.getItem("digit-recognizer-theme");
+            const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+            const mode = saved || (prefersDark ? "dark" : "light");
+            document.documentElement.setAttribute("data-theme", mode);
+        })();
+        </script>
+        """)
+
+    with gr.Row(elem_classes=["hero-top"]):
+        gr.HTML('<div class="hero-badge">MNIST CNN · Gradio</div>')
+        theme_toggle = gr.Radio(
+            choices=["Light", "Dark"],
+            value="Light",
+            label="Theme",
+            elem_classes=["theme-switch"],
+            scale=0,
+            min_width=160,
+        )
+
+    gr.HTML("""
         <div class="hero">
-            <div class="hero-badge">MNIST CNN · Gradio</div>
             <h1>Handwritten Digit Recognizer</h1>
             <p>Draw, upload an example, or pick a sample digit — see what the model actually reads.</p>
         </div>
-        """
-    )
+        """)
 
     empty_df = _confidence_df(np.zeros(10, dtype=np.float32), 0)
 
@@ -460,11 +618,16 @@ with gr.Blocks(title="Digit Recognizer") as demo:
                         gr.Markdown("**Try a sample** (loads MNIST digit onto canvas)")
                         with gr.Row(elem_classes=["example-row"]):
                             example_btns = [
-                                gr.Button(str(d), size="sm", variant="secondary") for d in range(10)
+                                gr.Button(str(d), size="sm", variant="secondary")
+                                for d in range(10)
                             ]
                         with gr.Row():
-                            predict_btn = gr.Button("Predict", variant="primary", scale=2)
-                            clear_btn = gr.Button("Clear canvas", variant="secondary", scale=1)
+                            predict_btn = gr.Button(
+                                "Predict", variant="primary", scale=2
+                            )
+                            clear_btn = gr.Button(
+                                "Clear canvas", variant="secondary", scale=1
+                            )
                         with gr.Row():
                             live_predict = gr.Checkbox(
                                 label="Live predict",
@@ -503,7 +666,7 @@ with gr.Blocks(title="Digit Recognizer") as demo:
                             y="confidence",
                             color="kind",
                             title="Confidence by digit",
-                            color_map={"top": "#1d4ed8", "other": "#cbd5e1"},
+                            color_map=_plot_colors(False),
                             y_lim=[0, 100],
                             height=240,
                             x_title="Digit",
@@ -521,8 +684,7 @@ with gr.Blocks(title="Digit Recognizer") as demo:
                 clear_history_btn = gr.Button("Clear history", variant="secondary")
 
     with gr.Accordion("Tips & how it works", open=False):
-        gr.Markdown(
-            """
+        gr.Markdown("""
             **Drawing:** one digit, thick strokes, centered on the canvas.
 
             **Preprocessing:** autocontrast → crop ink → pad → resize into 28×28 (MNIST layout).
@@ -530,8 +692,7 @@ with gr.Blocks(title="Digit Recognizer") as demo:
             **TTA mode:** runs 7 slightly shifted versions and averages probabilities — slower but stabler on messy strokes.
 
             **Metrics:** *margin* is gap between top two classes; *entropy* measures overall uncertainty.
-            """
-        )
+            """)
 
     outputs = [
         result_html,
@@ -568,6 +729,14 @@ with gr.Blocks(title="Digit Recognizer") as demo:
         outputs=outputs,
     )
 
+    demo.load(fn=None, js=THEME_BOOTSTRAP_JS, outputs=[theme_toggle])
+    theme_toggle.change(
+        fn=_apply_theme_mode,
+        inputs=[theme_toggle],
+        outputs=[confidence_plot],
+        js=THEME_APPLY_JS,
+    )
+
 
 if __name__ == "__main__":
     demo.launch(
@@ -575,6 +744,6 @@ if __name__ == "__main__":
         server_port=7860,
         share=False,
         inbrowser=True,
-        theme=theme,
+        theme=LIGHT_THEME,
         css=CUSTOM_CSS,
     )
