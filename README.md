@@ -24,23 +24,6 @@ CNN-Deep-digit-scanner-main/
 └── README.md
 ```
 
-## Architecture
-
-### System overview
-
-```mermaid
-flowchart TD
-    A[Browser UI<br/>Gradio Blocks] -->|canvas / upload / sample| B[Preprocessing<br/>app.py]
-    B --> C{TTA mode?}
-    C -->|No| D[Single forward pass]
-    C -->|Yes| E[7 shifted copies<br/>averaged]
-    D --> F[CNN Model<br/>mnist_cnn_model.keras]
-    E --> F
-    F --> G[Softmax probabilities]
-    G --> H[Metrics: confidence,<br/>margin, entropy]
-    H --> A
-```
-
 - **Training side** (`train_model.py`): loads MNIST → builds and trains the CNN → evaluates → saves `mnist_cnn_model.keras`.
 - **Serving side** (`app.py`): loads the saved model once at startup → Gradio UI captures input → preprocessing pipeline reshapes it to MNIST format → model predicts → results rendered back into the UI.
 
