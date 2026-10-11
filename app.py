@@ -429,8 +429,10 @@ CUSTOM_CSS = """
 }
 
 .gradio-container {
-    max-width: 1320px !important;
-    margin: 0 auto !important;
+    max-width: 100% !important;
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 1rem 2rem !important;
     background: var(--app-page-bg) !important;
 }
 .draw-panel .wrap { min-height: 0 !important; }
