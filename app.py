@@ -165,6 +165,14 @@ def _blank_canvas() -> np.ndarray:
     return np.full((*CANVAS_SIZE, 3), 255, dtype=np.uint8)
 
 
+def _is_blank(image) -> bool:
+    img = _extract_image(image)
+    if img is None:
+        return True
+    arr = np.array(img.convert("RGB"))
+    return bool(np.all(arr > 245))
+
+
 def _confidence_df(probabilities: np.ndarray, predicted: int) -> pd.DataFrame:
     return pd.DataFrame(
         {
@@ -237,7 +245,9 @@ def _history_dataframe(history: list[dict]) -> pd.DataFrame:
     return pd.DataFrame(history)
 
 
-def _empty_outputs(message: str):
+def _empty_outputs(message: str, history=None):
+    # FIX 1: history is preserved instead of being wiped.
+    history = history or []
     return (
         f'<div class="result-card empty"><p class="result-label">{message}</p></div>',
         None,
@@ -245,8 +255,8 @@ def _empty_outputs(message: str):
         _confidence_df(np.zeros(10, dtype=np.float32), 0),
         "",
         _metrics_html(0, 0, 0, False),
-        _history_dataframe([]),
-        [],
+        _history_dataframe(history),
+        history,
     )
 
 
@@ -254,11 +264,11 @@ def predict(image, history, use_tta):
     history = history or []
 
     if image is None:
-        return _empty_outputs("Draw a digit on the canvas to begin.")
+        return _empty_outputs("Draw a digit on the canvas to begin.", history)
 
     model_input, preview, raw = preprocess(image)
     if model_input is None:
-        return _empty_outputs("No stroke detected — draw a thicker digit.")
+        return _empty_outputs("No stroke detected — draw a thicker digit.", history)
 
     probabilities = _run_inference(model_input, use_tta)
     predicted = int(np.argmax(probabilities))
@@ -287,23 +297,19 @@ def predict(image, history, use_tta):
 
 
 def clear_canvas(history):
-    return (
-        _blank_canvas(),
-        _empty_outputs("Canvas cleared. Draw a new digit.")[0],
-        None,
-        None,
-        _confidence_df(np.zeros(10, dtype=np.float32), 0),
-        "",
-        _metrics_html(0, 0, 0, False),
-        _history_dataframe(history or []),
-        history or [],
-    )
+    history = history or []
+    cleared = _empty_outputs("Canvas cleared. Draw a new digit.", history)
+    # Return a blank white canvas (None leaves the Sketchpad stuck on its loader).
+    return (_blank_canvas(), *cleared)
 
 
-def load_example(digit: int, history, use_tta):
+def load_example(digit: int, history, use_tta, live):
     canvas = mnist_to_canvas(digit)
-    outputs = predict(canvas, history, use_tta)
-    return (canvas, *outputs)
+    # FIX 4: when live predict is on, canvas.change already runs predict,
+    # so skip predicting here to avoid duplicate history entries.
+    if live:
+        return (canvas, *[gr.skip() for _ in range(8)])
+    return (canvas, *predict(canvas, history, use_tta))
 
 
 def clear_history():
@@ -574,6 +580,23 @@ SELECT_BRUSH_JS = """
 }
 """
 
+CLEAR_TWICE_JS = """
+() => {
+  const selectBrush = () => {
+    document.querySelector(".draw-panel button[aria-label='Brush']")?.click();
+  };
+  setTimeout(selectBrush, 300);
+  setTimeout(selectBrush, 900);
+  if (!window.__clearRetry) {
+    window.__clearRetry = true;
+    setTimeout(() => {
+      document.querySelector("#clear-btn")?.click();
+      setTimeout(() => { window.__clearRetry = false; }, 800);
+    }, 600);
+  }
+}
+"""
+
 THEME_APPLY_JS = """
 (mode) => {
   const theme = mode === "Dark" ? "dark" : "light";
@@ -590,7 +613,7 @@ def _plot_colors(dark: bool) -> dict[str, str]:
 
 
 def _apply_theme_mode(mode: str):
-    return gr.BarPlot.update(color_map=_plot_colors(mode == "Dark"))
+    return gr.BarPlot(color_map=_plot_colors(mode == "Dark"))
 
 
 with gr.Blocks(title="Digit Recognizer") as demo:
@@ -652,7 +675,10 @@ with gr.Blocks(title="Digit Recognizer") as demo:
                                 "Predict", variant="primary", scale=2
                             )
                             clear_btn = gr.Button(
-                                "Clear canvas", variant="secondary", scale=1
+                                "Clear canvas",
+                                variant="secondary",
+                                scale=1,
+                                elem_id="clear-btn",
                             )
                         with gr.Row():
                             live_predict = gr.Checkbox(
@@ -738,21 +764,23 @@ with gr.Blocks(title="Digit Recognizer") as demo:
         fn=clear_canvas,
         inputs=[history_state],
         outputs=[canvas, *outputs],
-        js=SELECT_BRUSH_JS,
+        js=CLEAR_TWICE_JS,
     )
     clear_history_btn.click(fn=clear_history, outputs=[history_table, history_state])
 
     for digit, btn in enumerate(example_btns):
         btn.click(
-            fn=lambda h, t, d=digit: load_example(d, h, t),
-            inputs=[history_state, use_tta],
+            fn=lambda h, t, live, d=digit: load_example(d, h, t, live),
+            inputs=[history_state, use_tta, live_predict],
             outputs=[canvas, *outputs],
         )
 
     def maybe_predict(image, live, history, tta):
-        if live:
+        # FIX 3: skip when live is off or the canvas was reset to None,
+        # so the "Canvas cleared" message is not overwritten.
+        if live and not _is_blank(image):
             return predict(image, history, tta)
-        return gr.skip()
+        return tuple(gr.skip() for _ in range(8))
 
     canvas.change(
         fn=maybe_predict,
