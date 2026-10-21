@@ -19,10 +19,12 @@ BRUSH_SIZE = 22
 ERASER_SIZE = 44
 INK_THRESHOLD = 15
 MIN_INK_PIXELS = 40
+DIGIT_BOX = 20
 LOW_CONFIDENCE = 55.0
 HISTORY_LIMIT = 25
 
 TTA_SHIFTS = [(0, 0), (0, 1), (0, -1), (1, 0), (-1, 0), (1, 1), (-1, -1)]
+TTA_ROTATIONS = [-10, 10]
 
 if not os.path.exists(MODEL_PATH):
     raise FileNotFoundError(
@@ -83,20 +85,27 @@ def _center_digit(gray: Image.Image) -> Image.Image | None:
     cols = np.where(np.any(ink, axis=0))[0]
     cropped = arr[rows[0] : rows[-1] + 1, cols[0] : cols[-1] + 1]
 
+    # MNIST convention: scale the longest side to 20px (keeping aspect ratio),
+    # then shift so the center of mass sits at the middle of the 28x28 frame.
     height, width = cropped.shape
-    size = max(height, width)
-    margin = int(size * 0.25)
-    padded_size = size + margin * 2
+    scale = DIGIT_BOX / max(height, width)
+    new_width = max(1, round(width * scale))
+    new_height = max(1, round(height * scale))
+    glyph = Image.fromarray(cropped).resize((new_width, new_height), Image.LANCZOS)
 
-    padded = np.zeros((padded_size, padded_size), dtype=np.uint8)
-    y_off = (padded_size - height) // 2
-    x_off = (padded_size - width) // 2
-    padded[y_off : y_off + height, x_off : x_off + width] = cropped
+    frame = np.zeros((28, 28), dtype=np.uint8)
+    y_off = (28 - new_height) // 2
+    x_off = (28 - new_width) // 2
+    frame[y_off : y_off + new_height, x_off : x_off + new_width] = np.array(glyph)
 
-    inner = Image.fromarray(padded).resize((20, 20), Image.LANCZOS)
-    canvas = Image.new("L", (28, 28), 0)
-    canvas.paste(inner, (4, 4))
-    return canvas
+    weights = frame.astype(np.float32)
+    rows_idx, cols_idx = np.indices(frame.shape)
+    center_y = float(np.sum(rows_idx * weights) / np.sum(weights))
+    center_x = float(np.sum(cols_idx * weights) / np.sum(weights))
+    # Clamp so the shift never pushes ink outside the frame.
+    shift_y = int(np.clip(round(14 - center_y), -y_off, 28 - new_height - y_off))
+    shift_x = int(np.clip(round(14 - center_x), -x_off, 28 - new_width - x_off))
+    return Image.fromarray(_shift_digit(frame, shift_x, shift_y))
 
 
 def _shift_digit(arr: np.ndarray, dx: int, dy: int) -> np.ndarray:
@@ -113,17 +122,26 @@ def _shift_digit(arr: np.ndarray, dx: int, dy: int) -> np.ndarray:
     return shifted
 
 
+def _rotate_digit(arr: np.ndarray, degrees: float) -> np.ndarray:
+    img = Image.fromarray(arr.astype("float32"), mode="F")
+    return np.array(img.rotate(degrees, resample=Image.BILINEAR, fillcolor=0.0))
+
+
+def _forward(batch: np.ndarray) -> np.ndarray:
+    # Direct call skips predict()'s per-call setup, which dominates for tiny batches.
+    return model(batch, training=False).numpy()
+
+
 def _run_inference(model_input: np.ndarray, use_tta: bool) -> np.ndarray:
     if not use_tta:
-        return model.predict(model_input, verbose=0)[0]
+        return _forward(model_input)[0]
 
     base = model_input[0, :, :, 0]
-    batch = np.stack(
-        [_shift_digit(base, dx, dy) for dx, dy in TTA_SHIFTS],
-        axis=0,
-    )
+    views = [_shift_digit(base, dx, dy) for dx, dy in TTA_SHIFTS]
+    views += [_rotate_digit(base, degrees) for degrees in TTA_ROTATIONS]
+    batch = np.stack(views, axis=0)
     batch = batch[..., np.newaxis]
-    probs = model.predict(batch, verbose=0)
+    probs = _forward(batch)
     return np.mean(probs, axis=0)
 
 
@@ -316,39 +334,18 @@ def clear_history():
     return _history_dataframe([]), []
 
 
-def _build_theme(dark: bool):
-    base = gr.themes.Base if dark else gr.themes.Soft
-    theme = base(
-        primary_hue="blue",
-        secondary_hue="slate",
-        neutral_hue="slate",
-        font=[gr.themes.GoogleFont("Inter"), "system-ui", "sans-serif"],
-    )
-    if dark:
-        return theme.set(
-            body_background_fill="#0f1117",
-            block_background_fill="#1a1d27",
-            block_border_color="#2d3344",
-            block_border_width="1px",
-            block_label_text_color="#9ca3af",
-            block_title_text_color="#f3f4f6",
-            body_text_color="#e5e7eb",
-            input_background_fill="#12151f",
-            button_secondary_background_fill="#252a3a",
-            button_secondary_text_color="#e5e7eb",
-            block_radius="12px",
-            button_large_radius="10px",
-        )
-    return theme.set(
-        block_background_fill="*neutral_50",
-        block_border_width="1px",
-        block_radius="12px",
-        button_large_radius="10px",
-    )
-
-
-LIGHT_THEME = _build_theme(dark=False)
-DARK_THEME = _build_theme(dark=True)
+# Dark mode is applied at runtime via [data-theme="dark"] overrides in CUSTOM_CSS.
+LIGHT_THEME = gr.themes.Soft(
+    primary_hue="blue",
+    secondary_hue="slate",
+    neutral_hue="slate",
+    font=[gr.themes.GoogleFont("Inter"), "system-ui", "sans-serif"],
+).set(
+    block_background_fill="*neutral_50",
+    block_border_width="1px",
+    block_radius="12px",
+    button_large_radius="10px",
+)
 
 
 CUSTOM_CSS = """
@@ -689,7 +686,7 @@ with gr.Blocks(title="Digit Recognizer") as demo:
                             use_tta = gr.Checkbox(
                                 label="TTA mode",
                                 value=False,
-                                info="Average 7 shifted views for tougher strokes.",
+                                info="Average 9 shifted and rotated views for tougher strokes.",
                             )
 
                 with gr.Column(scale=4, min_width=320):
@@ -739,9 +736,9 @@ with gr.Blocks(title="Digit Recognizer") as demo:
         gr.Markdown("""
             **Drawing:** one digit, thick strokes, centered on the canvas.
 
-            **Preprocessing:** autocontrast → crop ink → pad → resize into 28×28 (MNIST layout).
+            **Preprocessing:** autocontrast → crop ink → scale longest side to 20px → center by mass in 28×28 (MNIST layout).
 
-            **TTA mode:** runs 7 slightly shifted versions and averages probabilities — slower but stabler on messy strokes.
+            **TTA mode:** runs 9 slightly shifted and rotated (±10°) versions and averages probabilities — slower but stabler on messy strokes.
 
             **Metrics:** *margin* is gap between top two classes; *entropy* measures overall uncertainty.
             """)
