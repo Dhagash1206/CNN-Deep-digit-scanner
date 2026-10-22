@@ -1,6 +1,6 @@
 # Model files
 *.keras
-mnist_cnn_model.keras
+!mnist_cnn_model.keras
 *.h5
 *.pb
 
