@@ -14,12 +14,21 @@ __pycache__/
 dist/
 build/
 *.egg
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
 
 # Virtual environment
 venv/
 .venv/
 env/
 .env/
+.venv-*/
+
+# Corrections saved from the app (personal handwriting)
+feedback/
 
 # Dataset
 *.npz
@@ -33,6 +42,7 @@ flagged/
 # OS
 .DS_Store
 Thumbs.db
+~$*
 
 # IDE
 .vscode/

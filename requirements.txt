@@ -1,3 +1,5 @@
+# Stable TensorFlow has no Python 3.14 wheels yet; use an older Python for a stable
+# install, or on 3.14 accept the release candidate: pip install --pre -r requirements.txt
 tensorflow>=2.16.0
 keras>=3.8.0
 gradio==6.30.0

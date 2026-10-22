@@ -11,20 +11,35 @@ import tensorflow as tf
 import gradio as gr
 from PIL import Image, ImageOps
 
+from calibration import apply_temperature, load_temperature
+from preprocessing import (
+    center_digit,
+    extract_image,
+    is_blank,
+    rotate_digit,
+    shift_digit,
+    to_grayscale_inverted,
+)
+
 MODEL_PATH = "mnist_cnn_model.keras"
+CALIBRATION_PATH = "mnist_cnn_model.calibration.json"
+SAMPLES_PATH = os.path.join("assets", "mnist_samples.png")
+FEEDBACK_DIR = "feedback"
+SERVER_HOST = os.environ.get("DIGIT_APP_HOST", "127.0.0.1")
+SERVER_PORT = int(os.environ.get("DIGIT_APP_PORT", "7860"))
 PREVIEW_SIZE = 168
 CANVAS_SIZE = (520, 520)
 GLYPH_SIZE = int(CANVAS_SIZE[0] * 0.75)
 BRUSH_SIZE = 22
 ERASER_SIZE = 44
-INK_THRESHOLD = 15
-MIN_INK_PIXELS = 40
-DIGIT_BOX = 20
 LOW_CONFIDENCE = 55.0
+# Below this calibrated confidence the app answers "unclear" instead of naming a digit.
+REJECT_CONFIDENCE = 40.0
 HISTORY_LIMIT = 25
 
 TTA_SHIFTS = [(0, 0), (0, 1), (0, -1), (1, 0), (-1, 0), (1, 1), (-1, -1)]
 TTA_ROTATIONS = [-10, 10]
+TTA_VIEW_COUNT = len(TTA_SHIFTS) + len(TTA_ROTATIONS)
 
 if not os.path.exists(MODEL_PATH):
     raise FileNotFoundError(
@@ -34,11 +49,16 @@ if not os.path.exists(MODEL_PATH):
 
 print(f"[INFO] Loading model from {MODEL_PATH}...")
 model = tf.keras.models.load_model(MODEL_PATH)
-print("[INFO] Model loaded successfully.")
+temperature = load_temperature(CALIBRATION_PATH)
+print(f"[INFO] Model loaded successfully (temperature {temperature:.3f}).")
 
 
 @lru_cache(maxsize=1)
 def _mnist_examples():
+    if os.path.exists(SAMPLES_PATH):
+        strip = np.array(Image.open(SAMPLES_PATH).convert("L"))
+        return {digit: strip[:, digit * 28 : (digit + 1) * 28] for digit in range(10)}
+
     (_, _), (x_test, y_test) = tf.keras.datasets.mnist.load_data()
     examples = {}
     for digit in range(10):
@@ -47,89 +67,9 @@ def _mnist_examples():
     return examples
 
 
-def _extract_image(image):
-    if image is None:
-        return None
-
-    if isinstance(image, dict):
-        data = image
-        image = data.get("composite")
-        if image is None:
-            layers = data.get("layers", [])
-            image = layers[0] if layers else None
-
-    if image is None:
-        return None
-
-    return Image.fromarray(image.astype("uint8"))
-
-
-def _to_grayscale_inverted(img: Image.Image) -> Image.Image:
-    if img.mode == "RGBA":
-        background = Image.new("RGB", img.size, (255, 255, 255))
-        background.paste(img, mask=img.split()[3])
-        img = background
-
-    img = img.convert("L")
-    return ImageOps.autocontrast(ImageOps.invert(img), cutoff=1)
-
-
-def _center_digit(gray: Image.Image) -> Image.Image | None:
-    arr = np.array(gray, dtype=np.uint8)
-    ink = arr > INK_THRESHOLD
-
-    if int(np.sum(ink)) < MIN_INK_PIXELS:
-        return None
-
-    rows = np.where(np.any(ink, axis=1))[0]
-    cols = np.where(np.any(ink, axis=0))[0]
-    cropped = arr[rows[0] : rows[-1] + 1, cols[0] : cols[-1] + 1]
-
-    # MNIST convention: scale the longest side to 20px (keeping aspect ratio),
-    # then shift so the center of mass sits at the middle of the 28x28 frame.
-    height, width = cropped.shape
-    scale = DIGIT_BOX / max(height, width)
-    new_width = max(1, round(width * scale))
-    new_height = max(1, round(height * scale))
-    glyph = Image.fromarray(cropped).resize((new_width, new_height), Image.LANCZOS)
-
-    frame = np.zeros((28, 28), dtype=np.uint8)
-    y_off = (28 - new_height) // 2
-    x_off = (28 - new_width) // 2
-    frame[y_off : y_off + new_height, x_off : x_off + new_width] = np.array(glyph)
-
-    weights = frame.astype(np.float32)
-    rows_idx, cols_idx = np.indices(frame.shape)
-    center_y = float(np.sum(rows_idx * weights) / np.sum(weights))
-    center_x = float(np.sum(cols_idx * weights) / np.sum(weights))
-    # Clamp so the shift never pushes ink outside the frame.
-    shift_y = int(np.clip(round(14 - center_y), -y_off, 28 - new_height - y_off))
-    shift_x = int(np.clip(round(14 - center_x), -x_off, 28 - new_width - x_off))
-    return Image.fromarray(_shift_digit(frame, shift_x, shift_y))
-
-
-def _shift_digit(arr: np.ndarray, dx: int, dy: int) -> np.ndarray:
-    shifted = np.roll(arr, shift=dy, axis=0)
-    shifted = np.roll(shifted, shift=dx, axis=1)
-    if dy > 0:
-        shifted[:dy, :] = 0
-    elif dy < 0:
-        shifted[dy:, :] = 0
-    if dx > 0:
-        shifted[:, :dx] = 0
-    elif dx < 0:
-        shifted[:, dx:] = 0
-    return shifted
-
-
-def _rotate_digit(arr: np.ndarray, degrees: float) -> np.ndarray:
-    img = Image.fromarray(arr.astype("float32"), mode="F")
-    return np.array(img.rotate(degrees, resample=Image.BILINEAR, fillcolor=0.0))
-
-
 def _forward(batch: np.ndarray) -> np.ndarray:
     # Direct call skips predict()'s per-call setup, which dominates for tiny batches.
-    return model(batch, training=False).numpy()
+    return apply_temperature(model(batch, training=False).numpy(), temperature)
 
 
 def _run_inference(model_input: np.ndarray, use_tta: bool) -> np.ndarray:
@@ -137,8 +77,8 @@ def _run_inference(model_input: np.ndarray, use_tta: bool) -> np.ndarray:
         return _forward(model_input)[0]
 
     base = model_input[0, :, :, 0]
-    views = [_shift_digit(base, dx, dy) for dx, dy in TTA_SHIFTS]
-    views += [_rotate_digit(base, degrees) for degrees in TTA_ROTATIONS]
+    views = [shift_digit(base, dx, dy) for dx, dy in TTA_SHIFTS]
+    views += [rotate_digit(base, degrees) for degrees in TTA_ROTATIONS]
     batch = np.stack(views, axis=0)
     batch = batch[..., np.newaxis]
     probs = _forward(batch)
@@ -146,14 +86,14 @@ def _run_inference(model_input: np.ndarray, use_tta: bool) -> np.ndarray:
 
 
 def preprocess(image):
-    img = _extract_image(image)
+    img = extract_image(image)
     if img is None:
-        return None, None, None
+        return None, None, None, None
 
-    gray = _to_grayscale_inverted(img)
-    centered = _center_digit(gray)
+    gray = to_grayscale_inverted(img)
+    centered = center_digit(gray)
     if centered is None:
-        return None, None, None
+        return None, None, None, None
 
     arr = np.array(centered, dtype="float32") / 255.0
     model_input = arr.reshape(1, 28, 28, 1)
@@ -163,7 +103,7 @@ def preprocess(image):
 
     raw_crop = gray.resize((PREVIEW_SIZE, PREVIEW_SIZE), Image.NEAREST)
     raw_rgb = np.stack([raw_crop, raw_crop, raw_crop], axis=-1)
-    return model_input, preview_rgb, raw_rgb
+    return model_input, preview_rgb, raw_rgb, np.array(centered, dtype=np.uint8)
 
 
 def mnist_to_canvas(digit: int) -> np.ndarray:
@@ -181,14 +121,6 @@ def mnist_to_canvas(digit: int) -> np.ndarray:
 
 def _blank_canvas() -> np.ndarray:
     return np.full((*CANVAS_SIZE, 3), 255, dtype=np.uint8)
-
-
-def _is_blank(image) -> bool:
-    img = _extract_image(image)
-    if img is None:
-        return True
-    arr = np.array(img.convert("RGB"))
-    return bool(np.all(arr > 245))
 
 
 def _confidence_df(probabilities: np.ndarray, predicted: int) -> pd.DataFrame:
@@ -212,6 +144,16 @@ def _margin(probabilities: np.ndarray) -> float:
 
 
 def _result_html(predicted: int, confidence_pct: float, margin_pct: float) -> str:
+    if confidence_pct < REJECT_CONFIDENCE:
+        return f"""
+    <div class="result-card low">
+        <p class="result-label">Unclear input</p>
+        <p class="result-digit">?</p>
+        <p class="result-confidence">Best guess {predicted} at {confidence_pct:.1f}%</p>
+        <p class="warn">This doesn't look like a clear digit — try redrawing it.</p>
+    </div>
+    """
+
     tone = "high" if confidence_pct >= LOW_CONFIDENCE and margin_pct >= 12 else "low"
     warning = ""
     if confidence_pct < LOW_CONFIDENCE:
@@ -263,8 +205,14 @@ def _history_dataframe(history: list[dict]) -> pd.DataFrame:
     return pd.DataFrame(history)
 
 
+OUTPUT_COUNT = 9
+
+
+def _skip_outputs():
+    return tuple(gr.skip() for _ in range(OUTPUT_COUNT))
+
+
 def _empty_outputs(message: str, history=None):
-    # FIX 1: history is preserved instead of being wiped.
     history = history or []
     return (
         f'<div class="result-card empty"><p class="result-label">{message}</p></div>',
@@ -275,16 +223,17 @@ def _empty_outputs(message: str, history=None):
         _metrics_html(0, 0, 0, False),
         _history_dataframe(history),
         history,
+        None,
     )
 
 
-def predict(image, history, use_tta):
+def predict(image, history, use_tta, record=True):
     history = history or []
 
     if image is None:
         return _empty_outputs("Draw a digit on the canvas to begin.", history)
 
-    model_input, preview, raw = preprocess(image)
+    model_input, preview, raw, digit_28 = preprocess(image)
     if model_input is None:
         return _empty_outputs("No stroke detected — draw a thicker digit.", history)
 
@@ -294,13 +243,14 @@ def predict(image, history, use_tta):
     margin_pct = _margin(probabilities)
     entropy = _entropy(probabilities)
 
-    entry = {
-        "time": datetime.now().strftime("%H:%M:%S"),
-        "digit": predicted,
-        "confidence": round(confidence_pct, 1),
-        "margin": round(margin_pct, 1),
-    }
-    history = [entry, *history][:HISTORY_LIMIT]
+    if record:
+        entry = {
+            "time": datetime.now().strftime("%H:%M:%S"),
+            "digit": "?" if confidence_pct < REJECT_CONFIDENCE else str(predicted),
+            "confidence": round(confidence_pct, 1),
+            "margin": round(margin_pct, 1),
+        }
+        history = [entry, *history][:HISTORY_LIMIT]
 
     return (
         _result_html(predicted, confidence_pct, margin_pct),
@@ -311,23 +261,34 @@ def predict(image, history, use_tta):
         _metrics_html(confidence_pct, margin_pct, entropy, use_tta),
         _history_dataframe(history),
         history,
+        digit_28,
     )
 
 
 def clear_canvas(history):
-    history = history or []
-    cleared = _empty_outputs("Canvas cleared. Draw a new digit.", history)
-    # Return a blank white canvas (None leaves the Sketchpad stuck on its loader).
-    return (_blank_canvas(), *cleared)
+    # The canvas itself is cleared in the browser by CLEAR_CANVAS_JS; this only resets the outputs.
+    return _empty_outputs("Canvas cleared. Draw a new digit.", history)
 
 
 def load_example(digit: int, history, use_tta, live):
     canvas = mnist_to_canvas(digit)
-    # FIX 4: when live predict is on, canvas.change already runs predict,
-    # so skip predicting here to avoid duplicate history entries.
+    # Live predict already runs on canvas.change, so predicting here would run twice.
     if live:
-        return (canvas, *[gr.skip() for _ in range(8)])
-    return (canvas, *predict(canvas, history, use_tta))
+        return (canvas, *_skip_outputs())
+    return (canvas, *predict(canvas, history, use_tta, record=False))
+
+
+def save_correction(label, digit_28):
+    if digit_28 is None:
+        return "Draw a digit first, then save its correct label."
+    if label is None or label == "":
+        return "Pick the correct digit first."
+    folder = os.path.join(FEEDBACK_DIR, str(label))
+    os.makedirs(folder, exist_ok=True)
+    path = os.path.join(folder, datetime.now().strftime("%Y%m%d-%H%M%S-%f") + ".png")
+    Image.fromarray(digit_28).save(path)
+    total = len([name for _, _, files in os.walk(FEEDBACK_DIR) for name in files])
+    return f"Saved as {label} ({total} corrections so far). Run `python finetune.py` to learn from them."
 
 
 def clear_history():
@@ -567,8 +528,11 @@ THEME_BOOTSTRAP_JS = """
 }
 """
 
-SELECT_BRUSH_JS = """
+# Sending a new canvas value from Python leaves the Sketchpad stuck on its loader until a
+# second update arrives, so clearing uses the editor's own "Clear canvas" tool instead.
+CLEAR_CANVAS_JS = """
 () => {
+  document.querySelector(".draw-panel button[aria-label='Clear canvas']")?.click();
   const selectBrush = () => {
     document.querySelector(".draw-panel button[aria-label='Brush']")?.click();
   };
@@ -577,21 +541,16 @@ SELECT_BRUSH_JS = """
 }
 """
 
-CLEAR_TWICE_JS = """
-() => {
-  const selectBrush = () => {
-    document.querySelector(".draw-panel button[aria-label='Brush']")?.click();
-  };
-  setTimeout(selectBrush, 300);
-  setTimeout(selectBrush, 900);
-  if (!window.__clearRetry) {
-    window.__clearRetry = true;
-    setTimeout(() => {
-      document.querySelector("#clear-btn")?.click();
-      setTimeout(() => { window.__clearRetry = false; }, 800);
-    }, 600);
-  }
-}
+# Runs in <head> before first paint, so dark mode never flashes light first.
+THEME_HEAD = """
+<script>
+(function () {
+  const saved = localStorage.getItem("digit-recognizer-theme");
+  const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+  const mode = saved || (prefersDark ? "dark" : "light");
+  document.documentElement.setAttribute("data-theme", mode);
+})();
+</script>
 """
 
 THEME_APPLY_JS = """
@@ -616,16 +575,7 @@ def _apply_theme_mode(mode: str):
 with gr.Blocks(title="Digit Recognizer") as demo:
     history_state = gr.State([])
 
-    gr.HTML("""
-        <script>
-        (function () {
-            const saved = localStorage.getItem("digit-recognizer-theme");
-            const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-            const mode = saved || (prefersDark ? "dark" : "light");
-            document.documentElement.setAttribute("data-theme", mode);
-        })();
-        </script>
-        """)
+    last_input_state = gr.State(None)
 
     with gr.Row(elem_classes=["hero-top"]):
         gr.HTML('<div class="hero-badge">MNIST CNN · Gradio</div>')
@@ -686,7 +636,7 @@ with gr.Blocks(title="Digit Recognizer") as demo:
                             use_tta = gr.Checkbox(
                                 label="TTA mode",
                                 value=False,
-                                info="Average 9 shifted and rotated views for tougher strokes.",
+                                info=f"Average {TTA_VIEW_COUNT} shifted and rotated views for tougher strokes.",
                             )
 
                 with gr.Column(scale=4, min_width=320):
@@ -721,26 +671,42 @@ with gr.Blocks(title="Digit Recognizer") as demo:
                             x_title="Digit",
                             y_title="Confidence (%)",
                         )
+                    with gr.Group(elem_classes=["panel"]):
+                        gr.Markdown("**Wrong prediction?** Save the correct label to improve the model.")
+                        with gr.Row():
+                            correct_label = gr.Dropdown(
+                                choices=[str(d) for d in range(10)],
+                                label="Correct digit",
+                                scale=1,
+                            )
+                            save_correction_btn = gr.Button(
+                                "Save correction", variant="secondary", scale=1
+                            )
+                        correction_status = gr.Markdown()
 
         with gr.Tab("History"):
             with gr.Group(elem_classes=["panel"]):
                 history_table = gr.Dataframe(
                     headers=["time", "digit", "confidence", "margin"],
-                    datatype=["str", "number", "number", "number"],
-                    label="Recent predictions",
+                    datatype=["str", "str", "number", "number"],
+                    label="Predictions confirmed with the Predict button",
                     interactive=False,
                 )
                 clear_history_btn = gr.Button("Clear history", variant="secondary")
 
     with gr.Accordion("Working/Process", open=False):
-        gr.Markdown("""
+        gr.Markdown(f"""
             **Drawing:** one digit, thick strokes, centered on the canvas.
 
-            **Preprocessing:** autocontrast → crop ink → scale longest side to 20px → center by mass in 28×28 (MNIST layout).
+            **Preprocessing:** autocontrast → crop ink → thicken thin strokes → scale longest side to 20px → center by mass in 28×28 (MNIST layout).
 
-            **TTA mode:** runs 9 slightly shifted and rotated (±10°) versions and averages probabilities — slower but stabler on messy strokes.
+            **TTA mode:** runs {TTA_VIEW_COUNT} slightly shifted and rotated (±10°) versions and averages probabilities — slower but stabler on messy strokes.
+
+            **Confidence:** temperature-calibrated, so 80% means about 80% of such predictions are right on MNIST. Below {REJECT_CONFIDENCE:.0f}% the app answers "unclear".
 
             **Metrics:** *margin* is gap between top two classes; *entropy* measures overall uncertainty.
+
+            **History:** only predictions confirmed with the Predict button are logged, not live updates while drawing.
             """)
 
     outputs = [
@@ -752,7 +718,9 @@ with gr.Blocks(title="Digit Recognizer") as demo:
         metrics_html,
         history_table,
         history_state,
+        last_input_state,
     ]
+    assert len(outputs) == OUTPUT_COUNT
 
     predict_inputs = [canvas, history_state, use_tta]
 
@@ -760,10 +728,15 @@ with gr.Blocks(title="Digit Recognizer") as demo:
     clear_btn.click(
         fn=clear_canvas,
         inputs=[history_state],
-        outputs=[canvas, *outputs],
-        js=CLEAR_TWICE_JS,
+        outputs=outputs,
+        js=CLEAR_CANVAS_JS,
     )
     clear_history_btn.click(fn=clear_history, outputs=[history_table, history_state])
+    save_correction_btn.click(
+        fn=save_correction,
+        inputs=[correct_label, last_input_state],
+        outputs=[correction_status],
+    )
 
     for digit, btn in enumerate(example_btns):
         btn.click(
@@ -773,11 +746,10 @@ with gr.Blocks(title="Digit Recognizer") as demo:
         )
 
     def maybe_predict(image, live, history, tta):
-        # FIX 3: skip when live is off or the canvas was reset to None,
-        # so the "Canvas cleared" message is not overwritten.
-        if live and not _is_blank(image):
-            return predict(image, history, tta)
-        return tuple(gr.skip() for _ in range(8))
+        # Skipping on a blank canvas keeps the "Canvas cleared" message visible.
+        if live and not is_blank(image):
+            return predict(image, history, tta, record=False)
+        return _skip_outputs()
 
     canvas.change(
         fn=maybe_predict,
@@ -796,10 +768,11 @@ with gr.Blocks(title="Digit Recognizer") as demo:
 
 if __name__ == "__main__":
     demo.launch(
-        server_name="0.0.0.0",
-        server_port=7860,
+        server_name=SERVER_HOST,
+        server_port=SERVER_PORT,
         share=False,
         inbrowser=True,
         theme=LIGHT_THEME,
         css=CUSTOM_CSS,
+        head=THEME_HEAD,
     )
