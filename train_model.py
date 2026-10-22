@@ -59,7 +59,7 @@ def make_datasets(x_train, y_train, batch_size=128, val_fraction=0.1, seed=42):
         )
         .prefetch(tf.data.AUTOTUNE)
     )
-    # Validation stays clean so EarlyStopping tracks real accuracy.
+    # Validation stays clean so EarlyStopping tracks real generalization.
     val_ds = (
         tf.data.Dataset.from_tensor_slices((x_train[val_idx], y_train[val_idx]))
         .batch(batch_size)
@@ -83,6 +83,8 @@ def build_model():
             # Block 3
             layers.Conv2D(128, (3, 3), activation="relu", padding="same"),
             layers.BatchNormalization(),
+            # 7x7 -> 3x3 so Flatten yields 1152 features instead of 6272.
+            layers.MaxPooling2D((2, 2)),
             # Classifier head
             layers.Flatten(),
             layers.Dense(256, activation="relu"),
@@ -99,7 +101,13 @@ def build_model():
     return model
 
 
+MODEL_PATH = "mnist_cnn_model.keras"
+CHECKPOINT_PATH = "mnist_cnn_model.best.keras"
+
+
 def train():
+    tf.keras.utils.set_random_seed(42)
+
     (x_train, y_train), (x_test, y_test) = load_data()
 
     train_ds, val_ds = make_datasets(x_train, y_train)
@@ -109,7 +117,11 @@ def train():
 
     callbacks = [
         tf.keras.callbacks.EarlyStopping(
-            monitor="val_accuracy", patience=4, restore_best_weights=True, verbose=1
+            monitor="val_loss", patience=5, restore_best_weights=True, verbose=1
+        ),
+        # Separate file so a crashed run never overwrites the model app.py loads.
+        tf.keras.callbacks.ModelCheckpoint(
+            CHECKPOINT_PATH, monitor="val_loss", save_best_only=True, verbose=1
         ),
         tf.keras.callbacks.ReduceLROnPlateau(
             monitor="val_loss", factor=0.5, patience=2, verbose=1
@@ -129,8 +141,8 @@ def train():
     print(f"\n[RESULT] Test Accuracy : {acc * 100:.2f}%")
     print(f"[RESULT] Test Loss     : {loss:.4f}")
 
-    model.save("mnist_cnn_model.keras")
-    print("[INFO] Model saved -> mnist_cnn_model.keras")
+    model.save(MODEL_PATH)
+    print(f"[INFO] Model saved -> {MODEL_PATH}")
 
 
 if __name__ == "__main__":
