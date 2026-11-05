@@ -1,6 +1,6 @@
 # Model files
 *.keras
-!mnist_cnn_model.keras
+!DigitModel.keras
 *.h5
 *.pb
 
@@ -28,7 +28,7 @@ env/
 .venv-*/
 
 # Corrections saved from the app (personal handwriting)
-feedback/
+Feedback/
 
 # Dataset
 *.npz
@@ -50,4 +50,7 @@ Thumbs.db
 *.swp
 *.swo
 
-CacheFile/
+ReadmeBackup/
+
+# Optuna study (TuneModel.py)
+TuningStudy.db

@@ -1,6 +1,6 @@
 """
 Step 1: Run this first to train and save the model.
-        python train_model.py
+        python TrainModel.py
 """
 
 import os
@@ -13,7 +13,7 @@ import tensorflow as tf
 from PIL import Image
 from tensorflow.keras import layers, models
 
-from calibration import (
+from Calibration import (
     apply_temperature,
     expected_calibration_error,
     fit_temperature,
@@ -129,10 +129,10 @@ def build_model(compiled=True):
     return model
 
 
-MODEL_PATH = "mnist_cnn_model.keras"
-CHECKPOINT_PATH = "mnist_cnn_model.best.keras"
-CALIBRATION_PATH = "mnist_cnn_model.calibration.json"
-SAMPLES_PATH = os.path.join("assets", "mnist_samples.png")
+MODEL_PATH = "DigitModel.keras"
+CHECKPOINT_PATH = "BestCheckpoint.keras"
+CALIBRATION_PATH = "ModelTemperature.json"
+SAMPLES_PATH = os.path.join("Assets", "SampleDigits.png")
 
 
 def predict_dataset(model, dataset):
@@ -219,7 +219,7 @@ def train():
         tf.keras.callbacks.EarlyStopping(
             monitor="val_loss", patience=5, restore_best_weights=True, verbose=1
         ),
-        # Separate file so a crashed run never overwrites the model app.py loads.
+        # Separate file so a crashed run never overwrites the model DigitApp.py loads.
         tf.keras.callbacks.ModelCheckpoint(
             CHECKPOINT_PATH, monitor="val_loss", save_best_only=True, verbose=1
         ),

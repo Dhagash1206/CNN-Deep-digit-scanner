@@ -11,8 +11,8 @@ import tensorflow as tf
 import gradio as gr
 from PIL import Image, ImageOps
 
-from calibration import apply_temperature, load_temperature
-from preprocessing import (
+from Calibration import apply_temperature, load_temperature
+from Preprocessing import (
     center_digit,
     extract_image,
     is_blank,
@@ -21,10 +21,10 @@ from preprocessing import (
     to_grayscale_inverted,
 )
 
-MODEL_PATH = "mnist_cnn_model.keras"
-CALIBRATION_PATH = "mnist_cnn_model.calibration.json"
-SAMPLES_PATH = os.path.join("assets", "mnist_samples.png")
-FEEDBACK_DIR = "feedback"
+MODEL_PATH = "DigitModel.keras"
+CALIBRATION_PATH = "ModelTemperature.json"
+SAMPLES_PATH = os.path.join("Assets", "SampleDigits.png")
+FEEDBACK_DIR = "Feedback"
 SERVER_HOST = os.environ.get("DIGIT_APP_HOST", "127.0.0.1")
 SERVER_PORT = int(os.environ.get("DIGIT_APP_PORT", "7860"))
 PREVIEW_SIZE = 168
@@ -44,7 +44,7 @@ TTA_VIEW_COUNT = len(TTA_SHIFTS) + len(TTA_ROTATIONS)
 if not os.path.exists(MODEL_PATH):
     raise FileNotFoundError(
         f"Model not found at '{MODEL_PATH}'.\n"
-        "Please run  python train_model.py  first."
+        "Please run  python TrainModel.py  first."
     )
 
 print(f"[INFO] Loading model from {MODEL_PATH}...")
@@ -288,7 +288,7 @@ def save_correction(label, digit_28):
     path = os.path.join(folder, datetime.now().strftime("%Y%m%d-%H%M%S-%f") + ".png")
     Image.fromarray(digit_28).save(path)
     total = len([name for _, _, files in os.walk(FEEDBACK_DIR) for name in files])
-    return f"Saved as {label} ({total} corrections so far). Run `python finetune.py` to learn from them."
+    return f"Saved as {label} ({total} corrections so far). Run `python FineTune.py` to learn from them."
 
 
 def clear_history():

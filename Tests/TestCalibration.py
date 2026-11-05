@@ -1,6 +1,6 @@
 import numpy as np
 
-import calibration as cal
+import Calibration as cal
 
 
 def _softmax(logits):

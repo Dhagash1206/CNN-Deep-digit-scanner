@@ -1,1 +1,2 @@
 pytest>=8.0
+optuna>=4.0

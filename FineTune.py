@@ -1,6 +1,6 @@
 """
 Fine-tune the saved model on corrections collected from the app's "Save correction" button.
-        python finetune.py
+        python FineTune.py
 """
 
 import glob
@@ -13,7 +13,7 @@ import numpy as np
 import tensorflow as tf
 from PIL import Image
 
-from train_model import (
+from TrainModel import (
     MODEL_PATH,
     build_augmenter,
     calibrate,
@@ -23,7 +23,7 @@ from train_model import (
     save_for_inference,
 )
 
-FEEDBACK_DIR = "feedback"
+FEEDBACK_DIR = "Feedback"
 MIN_SAMPLES = 10
 # Each correction is repeated this many times per epoch so a few dozen drawings outweigh noise.
 FEEDBACK_REPEATS = 20
@@ -85,7 +85,7 @@ def finetune():
     print("[INFO] Per digit:", np.bincount(y_feedback, minlength=10).tolist())
 
     (x_train, y_train), (x_test, y_test) = load_data()
-    # Same 10% split as train_model.make_datasets, so calibration uses unseen MNIST.
+    # Same 10% split as TrainModel.make_datasets, so calibration uses unseen MNIST.
     order = np.random.default_rng(42).permutation(len(x_train))
     val_count = int(len(x_train) * 0.1)
     val_idx, train_idx = order[:val_count], order[val_count:]

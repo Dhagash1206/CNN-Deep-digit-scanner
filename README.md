@@ -16,26 +16,27 @@ A handwritten digit recognizer built on a convolutional neural network trained o
 8. [Application Interface](#application-interface)
 9. [Configuration Constants](#configuration-constants)
 10. [Improving the Model with Corrections](#improving-the-model-with-corrections)
-11. [Testing](#testing)
-12. [Troubleshooting](#troubleshooting)
+11. [Hyperparameter Tuning](#hyperparameter-tuning)
+12. [Testing](#testing)
+13. [Troubleshooting](#troubleshooting)
 
 ---
 
 ## System Overview
 
 ```
- train_model.py                              app.py
+ TrainModel.py                               DigitApp.py
  ┌───────────────────────┐                   ┌─────────────────────────────────────────┐
  │ MNIST (60k train/10k  │                   │ Gradio Sketchpad (520x520 RGB)          │
  │ test) -> normalize    │                   │   -> grayscale + invert + autocontrast  │
- │ -> CNN (3 conv blocks)│  mnist_cnn_       │   -> crop to ink, thicken thin strokes  │
- │ -> EarlyStopping /    │  model.keras      │   -> fit 20x20, center of mass in 28x28 │
+ │ -> CNN (3 conv blocks)│  DigitModel.keras │   -> crop to ink, thicken thin strokes  │
+ │ -> EarlyStopping /    │                   │   -> fit 20x20, center of mass in 28x28 │
  │    ReduceLROnPlateau  │  + calibration    │   -> CNN forward pass (optional TTA)    │
  │ -> calibrate + save   │ ───────────────>  │   -> calibrated prediction, history     │
  └───────────────────────┘                   └──────────────────┬──────────────────────┘
             ^                                                   │ "Save correction"
             │                                                   v
-            └──── finetune.py <──────────────────── feedback/<digit>/*.png
+            └──── FineTune.py <──────────────────── Feedback/<digit>/*.png
 ```
 
 ---
@@ -44,19 +45,20 @@ A handwritten digit recognizer built on a convolutional neural network trained o
 
 | Path | Purpose |
 |------|---------|
-| `train_model.py` | Loads MNIST, trains the CNN, prints a confusion matrix, fits the calibration temperature and saves the model, calibration and sample digits. |
-| `finetune.py` | Fine-tunes the saved model on corrections collected in the app. |
-| `calibration.py` | Temperature scaling, NLL and expected calibration error. Pure NumPy. |
-| `app.py` | Loads the saved model and launches the Gradio application (inference, UI, theming). |
-| `preprocessing.py` | Canvas-to-MNIST conversion: polarity, cropping, stroke-width normalization, 20x20 fit and centering. Pure NumPy/Pillow. |
+| `TrainModel.py` | Loads MNIST, trains the CNN, prints a confusion matrix, fits the calibration temperature and saves the model, calibration and sample digits. |
+| `FineTune.py` | Fine-tunes the saved model on corrections collected in the app. |
+| `TuneModel.py` | Optional Optuna search over training hyperparameters (validation split only). |
+| `Calibration.py` | Temperature scaling, NLL and expected calibration error. Pure NumPy. |
+| `DigitApp.py` | Loads the saved model and launches the Gradio application (inference, UI, theming). |
+| `Preprocessing.py` | Canvas-to-MNIST conversion: polarity, cropping, stroke-width normalization, 20x20 fit and centering. Pure NumPy/Pillow. |
 | `requirements.txt` / `requirements-dev.txt` | Runtime and test dependencies. |
-| `tests/` | Pytest suite for preprocessing and calibration (no TensorFlow needed). |
-| `mnist_cnn_model.calibration.json` | Fitted softmax temperature, read by the app (defaults to 1.0 if missing). |
-| `assets/mnist_samples.png` | One MNIST test digit per class, so the sample buttons work offline. |
-| `.gitignore` | Excludes model artifacts (`*.keras`, `*.h5`, `*.pb`) except `mnist_cnn_model.keras`, plus `feedback/`, datasets, virtual environments and caches. |
-| `mnist_cnn_model.keras` | Pre-trained model (1.6 MB, weights only), committed so the app runs right after cloning. |
+| `Tests/` | Pytest suite for preprocessing and calibration (no TensorFlow needed). |
+| `ModelTemperature.json` | Fitted softmax temperature, read by the app (defaults to 1.0 if missing). |
+| `Assets/SampleDigits.png` | One MNIST test digit per class, so the sample buttons work offline. |
+| `.gitignore` | Excludes model artifacts (`*.keras`, `*.h5`, `*.pb`) except `DigitModel.keras`, plus `Feedback/`, datasets, virtual environments and caches. |
+| `DigitModel.keras` | Pre-trained model (1.6 MB, weights only), committed so the app runs right after cloning. |
 
-The pre-trained model is committed, so `python app.py` works without training first. Run `python train_model.py` to regenerate it.
+The pre-trained model is committed, so `python DigitApp.py` works without training first. Run `python TrainModel.py` to regenerate it.
 
 ---
 
@@ -84,14 +86,14 @@ source .venv/bin/activate        # Windows: .venv\Scripts\activate
 # 2. Install dependencies
 pip install -r requirements.txt
 
-# 3. (Optional) Retrain the model; a pre-trained mnist_cnn_model.keras is included
-python train_model.py
+# 3. (Optional) Retrain the model; a pre-trained DigitModel.keras is included
+python TrainModel.py
 
 # 4. Launch the application
-python app.py
+python DigitApp.py
 ```
 
-The app starts on `http://127.0.0.1:7860` and attempts to open a browser tab automatically. If the model file is missing, `app.py` raises a `FileNotFoundError` at import time; run step 3 in that case.
+The app starts on `http://127.0.0.1:7860` and attempts to open a browser tab automatically. If the model file is missing, `DigitApp.py` raises a `FileNotFoundError` at import time; run step 3 in that case.
 
 ---
 
@@ -122,7 +124,7 @@ Defined in `build_model()` as a Keras `Sequential` model with input shape `(28, 
 
 ## Training Pipeline
 
-Implemented in `train_model.py`.
+Implemented in `TrainModel.py`.
 
 - **Data:** MNIST via `tf.keras.datasets.mnist` (60,000 training and 10,000 test images, 28x28 grayscale).
 - **Preprocessing:** pixel values cast to `float32` and scaled to `[0, 1]`; a channel axis is added to produce `(N, 28, 28, 1)`.
@@ -134,10 +136,10 @@ Implemented in `train_model.py`.
 - **Schedule:** up to 20 epochs, batch size 128, a fixed 10% of the training set held out for validation. `tf.keras.utils.set_random_seed(42)` makes runs repeatable.
 - **Callbacks:**
   - `EarlyStopping` monitors `val_loss`, patience 5, restores the best weights.
-  - `ModelCheckpoint` saves the best epoch to `mnist_cnn_model.best.keras`, so a crashed run keeps its progress without overwriting the app's model.
+  - `ModelCheckpoint` saves the best epoch to `BestCheckpoint.keras`, so a crashed run keeps its progress without overwriting the app's model.
   - `ReduceLROnPlateau` monitors `val_loss`, halves the learning rate after 2 stagnant epochs.
 - **Evaluation:** test accuracy and loss, a 10x10 confusion matrix, per-class accuracy and the five most confused pairs.
-- **Calibration:** a softmax temperature is fitted on the validation split by minimizing negative log-likelihood, then NLL and expected calibration error (ECE) are reported on the test split, before and after scaling. It is saved to `mnist_cnn_model.calibration.json`.
+- **Calibration:** a softmax temperature is fitted on the validation split by minimizing negative log-likelihood, then NLL and expected calibration error (ECE) are reported on the test split, before and after scaling. It is saved to `ModelTemperature.json`.
 - **Output:** the model is saved without optimizer state through an uncompiled copy (`save_for_inference`), because Keras 3 ignores `include_optimizer=False`. This cuts the file from 4.8 MB to 1.6 MB.
 
 The committed model scored 99.23% test accuracy (weakest classes: 7 at 98.44% and 9 at 98.51%; most confused pairs 9->4 and 7->2). On MNIST the CNN is already well calibrated: the fitted temperature is 1.057 and test ECE is 0.15% before scaling and 0.17% after. Calibration matters more after fine-tuning on corrections, and the app applies whatever temperature the last run produced.
@@ -151,9 +153,9 @@ The committed model scored 99.23% test accuracy (weakest classes: 7 at 98.44% an
 
 ## Inference Pipeline
 
-The canvas image differs from MNIST in stroke width, position and polarity, so `app.py` normalizes it into MNIST layout before prediction.
+The canvas image differs from MNIST in stroke width, position and polarity, so `DigitApp.py` normalizes it into MNIST layout before prediction.
 
-### 1. Preprocessing (`preprocess`, helpers in `preprocessing.py`)
+### 1. Preprocessing (`preprocess`, helpers in `Preprocessing.py`)
 
 1. **Extraction** (`extract_image`): accepts a raw array or a Gradio editor dict (`composite`, falling back to the first layer).
 2. **Polarity and contrast** (`to_grayscale_inverted`): flattens RGBA onto white, converts to grayscale, inverts to white-ink-on-black, then applies `ImageOps.autocontrast` with a 1% cutoff.
@@ -193,7 +195,7 @@ Built with `gradio.Blocks`, served on `127.0.0.1:7860` by default. Set `DIGIT_AP
   - **Clear canvas** uses the Sketchpad's own clear tool in the browser, because setting the canvas value from Python leaves the Sketchpad stuck on its loader until a second update arrives.
   - **Live predict** re-runs inference after each stroke; **TTA mode** switches to the 9-view ensemble.
   - Output panel: predicted digit, metrics cards, top-3 chips, the processed 28x28 model input beside the raw capture, and a per-digit confidence bar chart.
-  - **Wrong prediction?** panel: pick the correct digit and press **Save correction** to store the 28x28 model input under `feedback/<digit>/`.
+  - **Wrong prediction?** panel: pick the correct digit and press **Save correction** to store the 28x28 model input under `Feedback/<digit>/`.
 - **History tab:** the most recent 25 predictions confirmed with the **Predict** button (time, digit, confidence, margin), held in per-session `gr.State` and clearable with a button. Live updates while drawing are not logged, so half-drawn digits don't fill the table.
 - **Theming:** light and dark modes via a theme toggle, persisted in the browser through `localStorage`; the chart colors are updated to match. The saved theme is applied by a script in `<head>` (`THEME_HEAD`), so dark mode never flashes light first.
 - **Working/Process accordion:** in-app summary of the drawing, preprocessing and metric definitions.
@@ -202,15 +204,15 @@ Built with `gradio.Blocks`, served on `127.0.0.1:7860` by default. Set `DIGIT_AP
 
 ## Configuration Constants
 
-Defined at the top of `app.py`; edit them directly to tune behavior.
+Defined at the top of `DigitApp.py`; edit them directly to tune behavior.
 
 | Constant | Default | Effect |
 |----------|---------|--------|
-| `MODEL_PATH` | `mnist_cnn_model.keras` | Model file loaded at startup. |
+| `MODEL_PATH` | `DigitModel.keras` | Model file loaded at startup. |
 | `CANVAS_SIZE` | `(520, 520)` | Sketchpad dimensions. |
 | `BRUSH_SIZE` / `ERASER_SIZE` | `22` / `44` | Default tool sizes. |
 | `PREVIEW_SIZE` | `168` | Display size of the preview images. |
-| `CALIBRATION_PATH` | `mnist_cnn_model.calibration.json` | Temperature file; missing means 1.0. |
+| `CALIBRATION_PATH` | `ModelTemperature.json` | Temperature file; missing means 1.0. |
 | `SERVER_HOST` / `SERVER_PORT` | `127.0.0.1` / `7860` | From `DIGIT_APP_HOST` / `DIGIT_APP_PORT`. |
 | `LOW_CONFIDENCE` | `55.0` | Confidence percentage below which a warning appears. |
 | `REJECT_CONFIDENCE` | `40.0` | Confidence percentage below which the result is shown as "?". |
@@ -218,7 +220,7 @@ Defined at the top of `app.py`; edit them directly to tune behavior.
 | `TTA_SHIFTS` | 7 `(dx, dy)` pairs | Shifts averaged in TTA mode. |
 | `TTA_ROTATIONS` | `[-10, 10]` | Rotation angles (degrees) averaged in TTA mode. |
 
-Preprocessing constants live at the top of `preprocessing.py`:
+Preprocessing constants live at the top of `Preprocessing.py`:
 
 | Constant | Default | Effect |
 |----------|---------|--------|
@@ -233,15 +235,76 @@ The launch call in the `__main__` block controls `share` and `inbrowser`.
 
 ## Improving the Model with Corrections
 
-1. In the app, when a prediction is wrong, pick the correct digit and press **Save correction**. Each save writes the exact 28x28 image the model saw to `feedback/<digit>/<timestamp>.png`. The folder is git-ignored, since it is your handwriting.
+1. In the app, when a prediction is wrong, pick the correct digit and press **Save correction**. Each save writes the exact 28x28 image the model saw to `Feedback/<digit>/<timestamp>.png`. The folder is git-ignored, since it is your handwriting.
 2. After at least 10 corrections, run:
 
    ```bash
-   python finetune.py
+   python FineTune.py
    ```
 
-   It mixes each correction (repeated 20 times per epoch) with 30 random MNIST images per correction, so the model does not forget MNIST. It then fine-tunes for 5 epochs at learning rate `1e-4` with the same augmentation as training, refits the calibration temperature and overwrites `mnist_cnn_model.keras`.
-3. It prints MNIST test accuracy before and after. If that drops noticeably, restore the model with `git checkout mnist_cnn_model.keras mnist_cnn_model.calibration.json`. The reported corrections accuracy is measured on the training samples themselves, so treat it as optimistic.
+   It mixes each correction (repeated 20 times per epoch) with 30 random MNIST images per correction, so the model does not forget MNIST. It then fine-tunes for 5 epochs at learning rate `1e-4` with the same augmentation as training, refits the calibration temperature and overwrites `DigitModel.keras`.
+3. It prints MNIST test accuracy before and after. If that drops noticeably, restore the model with `git checkout DigitModel.keras ModelTemperature.json`. The reported corrections accuracy is measured on the training samples themselves, so treat it as optimistic.
+
+---
+
+## Hyperparameter Tuning
+
+```bash
+pip install -r requirements-dev.txt
+python TuneModel.py
+```
+
+`TuneModel.py` runs 40 Optuna trials (`TRIALS`) of up to 12 epochs each (`MAX_EPOCHS`). On a CPU, an epoch takes about 15 seconds, so a full run takes 1-2 hours. The study is saved to `TuningStudy.db` (git-ignored), so rerunning the script resumes an interrupted search.
+
+### Parameters, ranked by expected impact
+
+Trial 0 is always the current `TrainModel.py` configuration (the start values), so every other trial is measured against it.
+
+| Rank | Parameter | Range | Start | Why this range |
+|------|-----------|-------|-------|----------------|
+| 1 | `learning_rate` | 3e-4 to 3e-3 (log) | 1e-3 | The most sensitive setting for Adam with BatchNorm. Above 3e-3 training diverges early; below 3e-4 it does not converge within 12 epochs. |
+| 2 | `augmentation_strength` | 0.5 to 1.5 | 1.0 | Multiplies rotation, shear, zoom and shift together. It trades MNIST accuracy against robustness on canvas digits. |
+| 3 | `stroke_prob` | 0 to 0.35 | 0.25 | The chance of thinning, and separately of thickening, each training image. This setting closed most of the gap on thin canvas strokes. |
+| 4 | `dropout` | 0.2 to 0.6 | 0.4 | Regularizes the 295k-weight dense layer, which holds most of the parameters. |
+| 5 | `weight_decay` | 1e-6 to 1e-3 (log) | 1e-6 | AdamW decay. The lower bound is effectively the current "no decay". |
+| 6 | `batch_size` | 64, 128, 256 | 128 | Interacts with the learning rate: larger batches usually need a higher one. |
+| 7 | `dense_units` | 128, 256, 384 | 256 | Head capacity. MNIST rarely needs more. |
+| 8 | `base_filters` | 24, 32, 48 | 32 | Width of the convolutional blocks (x1, x2, x4). Costs time more than it adds accuracy. |
+
+### Search method
+
+- **Bayesian (TPE):** a multivariate TPE sampler with seed 42. With 8 parameters, grid search would need thousands of runs, and random search wastes trials on regions TPE learns to skip.
+- **40 trials:** about 5 per parameter, which is enough for TPE to settle after its random warm-up.
+- **Pruning:** `MedianPruner` (5 startup trials, 3 warm-up epochs) stops a trial whose validation loss falls behind the median of earlier trials at the same epoch.
+- **Importance:** the script prints the parameter importances at the end. If a parameter scores near 0, fix it and narrow the search.
+
+### Validation plan
+
+- **Hold-out split, not cross-validation:** a 6,000-image validation split gives about ±0.1% accuracy noise, smaller than the differences being compared. 5-fold cross-validation would cost 5 times as much for little gain. If the top three trials are within 0.05% of each other, re-run them with 3 different seeds before picking one.
+- **Same split as training:** the permutation matches `TrainModel.make_datasets` (seed 42).
+- **Objective:** the mean of validation loss on clean digits and on digits eroded by about 1px. The eroded set stands in for thin canvas strokes. Loss is used rather than accuracy because at 99.4% accuracy, trials differ by only a handful of images.
+- **Early stopping:** `EarlyStopping` (patience 3, best weights restored) and `ReduceLROnPlateau` (patience 2), both on validation loss.
+- **No leakage:**
+  - The MNIST test set is never loaded into the search.
+  - Augmentation applies only to training batches.
+  - `Feedback/` corrections are not used.
+  - Report test accuracy once, after retraining with the chosen values.
+
+### Overfitting and underfitting
+
+The script stores `val_accuracy`, `thin_val_accuracy`, `train_val_gap` and `epochs_run` with each trial.
+
+| Sign | Likely cause | Adjust |
+|------|--------------|--------|
+| Validation loss rises while training loss falls; early stopping fires within 3-5 epochs | Overfitting | Raise `dropout` or `weight_decay`; reduce `dense_units` |
+| Clean validation accuracy is high but thin validation accuracy is more than 1.5 points lower | Overfitting to MNIST stroke style | Raise `stroke_prob` or `augmentation_strength` |
+| Training and validation accuracy both below 99% and still climbing at epoch 12 | Underfitting or too few epochs | Raise `MAX_EPOCHS` or `learning_rate`; reduce augmentation |
+| Training accuracy well below validation accuracy late in training | Augmentation too strong | Lower `augmentation_strength` |
+| Loss is NaN or stuck near 2.3 | Learning rate too high | Lower the upper bound of the `learning_rate` range |
+
+### Applying the result
+
+Copy the best values into `TrainModel.py`. `TuneModel.py` already uses `AdamW` instead of `Adam`, so switch the optimizer if `weight_decay` comes out above about 1e-5. Then run `python TrainModel.py` and compare its test accuracy with the current 99.40%.
 
 ---
 
@@ -252,7 +315,7 @@ pip install -r requirements-dev.txt
 pytest
 ```
 
-The suite covers shifting, blank detection, the 20x20 fit and center of mass, stroke-width estimation and thickening, and temperature fitting, save and load. It imports only `preprocessing.py` and `calibration.py`, so it runs in under a second without loading TensorFlow.
+The suite covers shifting, blank detection, the 20x20 fit and center of mass, stroke-width estimation and thickening, and temperature fitting, save and load. It imports only `Preprocessing.py` and `Calibration.py`, so it runs in under a second without loading TensorFlow.
 
 ---
 
@@ -260,10 +323,10 @@ The suite covers shifting, blank detection, the 20x20 fit and center of mass, st
 
 | Symptom | Cause and fix |
 |---------|---------------|
-| `FileNotFoundError: Model not found` | Run `python train_model.py` first. |
+| `FileNotFoundError: Model not found` | Run `python TrainModel.py` first. |
 | "No stroke detected" message | The drawing has fewer than 40 ink pixels; draw thicker or larger. |
 | Frequent low-confidence warnings | Center the digit, draw it larger, or enable TTA mode. |
-| Port 7860 already in use | Run with `DIGIT_APP_PORT=7861 python app.py`. |
+| Port 7860 already in use | Run with `DIGIT_APP_PORT=7861 python DigitApp.py`. |
 | App not reachable from another device | It binds to `127.0.0.1` by default; set `DIGIT_APP_HOST=0.0.0.0`. |
 | TensorFlow log noise or oneDNN differences | The scripts already set `TF_CPP_MIN_LOG_LEVEL=2` and `TF_ENABLE_ONEDNN_OPTS=0`. |
-| API errors after upgrading Gradio | `app.py` relies on `gr.skip()`, `launch(theme=, css=, head=)` and the `Sketchpad` toolbar DOM (`aria-label='Brush'` and `aria-label='Clear canvas'`); reinstall the pinned version with `pip install -r requirements.txt`. |
+| API errors after upgrading Gradio | `DigitApp.py` relies on `gr.skip()`, `launch(theme=, css=, head=)` and the `Sketchpad` toolbar DOM (`aria-label='Brush'` and `aria-label='Clear canvas'`); reinstall the pinned version with `pip install -r requirements.txt`. |

@@ -1,7 +1,7 @@
 import numpy as np
 from PIL import Image, ImageDraw
 
-import preprocessing as pp
+import Preprocessing as pp
 
 
 def _drawing(points, brush=22, size=520):
